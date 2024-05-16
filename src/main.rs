@@ -1,5 +1,6 @@
 mod handler;
-use handler::{EventHandler, Mode};
+use handler::{EventHandler, Mode, HandleResult};
+use buffer::State;
 
 mod buffer;
 use buffer::Buffer;
@@ -18,11 +19,13 @@ const CURSOR: Color = Color::RGB(180, 180, 180);
 const TEXT: Color = Color::RGB(255, 255, 255);
 const FONTSIZE: u16 = 24;
 
+
 macro_rules! rect(
   ($x:expr, $y:expr, $w:expr, $h:expr) => (
     Rect::new($x as i32, $y as i32, $w as u32, $h as u32)
   )
 );
+
 
 struct App {
   canvas: Canvas<Window>,
@@ -30,6 +33,7 @@ struct App {
   ttf_context: Sdl2TtfContext,
   buffer: Buffer,
   font: &'static str,
+  history: StateHistory,
 }
 
 impl App {
@@ -54,7 +58,8 @@ impl App {
       event_handler: EventHandler::new(&sdl_context)?,
       buffer: Buffer::empty(),
       ttf_context: sdl2::ttf::init().map_err(|e| e.to_string())?,
-      font: "./Courier_prime.ttf"
+      font: "./Courier_prime.ttf",
+      history: StateHistory::new(),      
     })
   }
 
@@ -78,7 +83,7 @@ impl App {
     self.canvas.fill_rect(rect)?;
     font.set_style(sdl2::ttf::FontStyle::NORMAL);
 
-    // Mode
+    // MODE
     let surface = font
       .render(&format!("mode: {:?}", self.event_handler.mode()))
       .blended(TEXT)
@@ -93,19 +98,38 @@ impl App {
       rect.y,
       width, 
       height
-    ))?;
+    ))?;   
+
+    // Motion
+    if self.event_handler.get_motion_str().len() > 0 {
+      let surface = font
+        .render(&format!("{}", self.event_handler.get_motion_str()))
+        .blended(TEXT)
+        .map_err(|e| e.to_string())?;
+      let texture = texture_creator
+        .create_texture_from_surface(&surface)
+        .map_err(|e| e.to_string())?;
+      let TextureQuery {width, height, ..} = texture.query();
+
+      self.canvas.copy(&texture, None, rect!(
+        size.0.saturating_sub(rect.x as u32 + 150),
+        rect.y,
+        width, 
+        height
+      ))?; 
+    }
 
     Ok(())
   }
 
   fn render_cursor(&mut self) -> Result<(), String> {
     self.canvas.set_draw_color(CURSOR);
-    let x = self.buffer.chars_before_cursor();
+    let x = self.buffer.char_idx();
     let width = match self.event_handler.mode() {
       Mode::Edit => 14,
       Mode::Insert => 3,
     };
-    self.canvas.fill_rect(rect!(x*14, self.buffer.row*25, width, 24))?;
+    self.canvas.fill_rect(rect!(x*14, self.buffer.row()*25, width, 24))?;
     Ok(())
   }
 
@@ -117,7 +141,7 @@ impl App {
     let mut font = self.ttf_context.load_font(self.font, FONTSIZE)?;
     font.set_style(sdl2::ttf::FontStyle::NORMAL);
     let mut vert_offset = 0;
-    for i in 0..self.buffer.height(){
+    for i in 0..self.buffer.height() {
       if self.buffer.nth(i).len() == 0 {
         vert_offset += 25;
         continue;
@@ -131,7 +155,6 @@ impl App {
         .map_err(|e| e.to_string())?;
       let TextureQuery {width, height, ..} = texture.query();
       let rect = rect!(0, 0, self.canvas.logical_size().0, self.canvas.logical_size().1);
-      
 
       self.canvas.copy(&texture, None, rect!(
         rect.x,
@@ -149,20 +172,44 @@ impl App {
   fn run(&mut self) -> Result<(), String> {
     'running: loop {
       match self.event_handler.handle(&mut self.buffer) {
-        Ok(None) => {},
-        Ok(Some(motion)) => self.buffer.apply_motion(motion, self.event_handler.mode()),
-        Err(()) => break 'running,
+        HandleResult::None => {},
+        HandleResult::State(state) => self.history.push(state),
+        HandleResult::Quit => break 'running,
       }
       self.render()?;
     }
-    assert!(self.buffer.buf[self.buffer.row].is_char_boundary(self.buffer.col));
     Ok(())
   }
 }
 
 
 fn main() -> Result<(), String> {
+  // env::set_var("RUST_BACKTRACE", "1");
+
   let mut app = App::new()?;
   app.run()?;
   Ok(())
+}
+
+
+
+struct StateHistory {
+  past_states: Vec<State>,
+  cursor: usize,
+}
+
+impl StateHistory {
+  fn push(&mut self, state: State) {
+    self.past_states.insert(self.cursor, state);
+    self.cursor += 1;
+  }
+}
+
+impl StateHistory {
+  fn new() -> Self {
+    StateHistory { 
+      past_states: vec![State::empty()],
+      cursor: 0
+    }
+  }
 }
