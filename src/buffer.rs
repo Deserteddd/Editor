@@ -1,22 +1,10 @@
-use crate::handler::{Dir, Mode, Motion, Cmd, Action};
+use crate::motion::{Dir, Motion, Cmd, Action, Dest};
+use crate::handler::Mode;
 use std::fmt::Display;
 
-use crate::handler::MOVE_END;
+use crate::motion::MOVE_END; 
 
-#[derive(Debug)]
-pub struct State {
-  rows: (usize, usize),
-  content: Vec<String>
-}
 
-impl State {
-  pub fn empty() -> Self {
-    State {
-      rows: (0, 1),
-      content: vec![String::new()]
-    }
-  }
-}
 
 #[derive(Debug, Clone)]
 pub struct Buffer {
@@ -24,7 +12,6 @@ pub struct Buffer {
   row: usize,
   byte: usize,
   char: usize,
-  last_mod_rows: (usize, usize) // (from..to) exclusive
 }
 
 impl Buffer {
@@ -34,69 +21,82 @@ impl Buffer {
       row: 0, 
       byte: 0, 
       char: 0,
-      last_mod_rows: (0, 1)
     }
   }
 
-  
-  pub fn apply_motion(&mut self, m: Motion, mode: Mode) -> State {
-    println!("Applying motion: {}", m);
+  pub fn _from_lines(lines: Vec<String>) -> Self {
+    Buffer { 
+      buf: lines, 
+      row: 0, 
+      byte: 0, 
+      char: 0,
+    }
+  }
 
-    let by = match m.buf[1] {
-      Cmd::By(n) => n,
-      _ => 0,
+  pub fn apply_motion(&mut self, m: Motion, mode: Mode, ) {
+    let verb = match m.buf[0] {
+      Cmd::Verb(v) => v,
+      _ => panic!("Motion has no verb\n{}", m)
     };
-    let dir = match m.buf[2] {
-      Cmd::To(d) => d,
-      _ => panic!("Motion has no direction:\n\t{}", m),
+    // println!("Buffer: {}", self);
+    match m.buf[1] {
+      Cmd::By(n) => self.apply_w_dir(verb, n, m.buf[2].unwrap_dir()),
+      Cmd::ToDest(dest) => self.apply_no_dir(verb, dest),
+      _ => panic!("Motion[1] is empty\n{}", m),
     };
-
-    match m.buf[0] {
-      Cmd::Verb(Action::Move) => {
-        self.move_cursor(by, dir, mode)
-      },
-      Cmd::Verb(Action::Cut) => {
-        self.last_mod_rows = self.touches_rows(by, dir);
-        self.remove_at_cursor(by, dir, mode)
-      },
-      Cmd::Verb(Action::Replace) => {
-        self.delete_lines_down(by)
-      }
-      _=> {}
+    if mode == Mode::Edit {
+      self.jump_back_if_end()
     }
+  }
 
-    State { 
-      rows: self.last_mod_rows,
-      content: match self.buf.get(self.last_mod_rows.0..self.last_mod_rows.1) {
-        Some(t) => Vec::from(t),
-        None => vec![self.nth(0).to_owned()]
+  fn apply_w_dir(&mut self, verb: Action, by: usize, dir: Dir) {
+    match verb {
+      Action::Cut => {
+        self.remove_at_cursor(by, dir)
+      },
+      Action::Move => {
+        self.move_cursor(by, dir)
+      },
+    }
+  }
+
+  fn apply_no_dir(&mut self, verb: Action, dest: Dest) {
+    match verb {
+      Action::Cut => match dest {
+        // Maybe should make this actually work, but this is how it works in vim.
+        Dest::TxtStart => self.delete_lines_down(1),
+        Dest::Line     => self.delete_lines_down(1),
+        Dest::Endl     => self.remove_at_cursor(usize::MAX, Dir::R),
+      },
+      Action::Move => match dest {
+        Dest::Endl => {
+          self.byte = self.nth(self.row).len();
+          self.char = self.char_len();
+        },
+        Dest::TxtStart => {
+          self.byte = self.leading_whitespaces(self.row);
+          self.char = self.byte;
+        }
+        _ => panic!("Invalid dest for Action::Move\n{:?}", dest)
       }
     }
   }
 
-  fn touches_rows(&self, by: usize, dir: Dir) -> (usize, usize) {
-    match dir {
-      Dir::L | Dir::R => (self.row, self.row + 1),
-      Dir::U => (by, self.row),
-      _ => (0, 0)
-    }
-  }
-
-  
-  pub fn remove_at_cursor(&mut self, n: usize, dir: Dir, mode: Mode) {
+  fn remove_at_cursor(&mut self, n: usize, dir: Dir) {
     match dir {
       Dir::L => {
-        if self.char == 0 && self.row > 0 && mode == Mode::Insert {
+        if self.char == 0 && self.row > 0 {
+          println!("GASDASDASD");
           let a = std::mem::take(&mut self.buf[self.row]);
           self.row -= 1;
-          self.apply_motion(MOVE_END, mode);
+          self.char = self.char_len();
+          self.byte = self.byte_len();
           self.buf[self.row].push_str(&a);
           return
         }
         if self.char >= n {
           let end = self.byte;
-          self.move_cursor(n, dir, mode);
-          println!("Buffer {}..{}: {:?}", self.byte, end, self.nth(self.row).get(self.byte..end));
+          self.move_cursor(n, dir);
           self.buf[self.row].replace_range(self.byte..end, "");
         } else {
           self.buf[self.row].replace_range(..self.byte, "");
@@ -105,7 +105,6 @@ impl Buffer {
         }
       },
       Dir::R => {
-        assert_eq!(mode, Mode::Edit);
         if self.char.saturating_add(n) < self.char_len() {
           let end = self.nth(self.row)
             .char_indices()
@@ -121,7 +120,7 @@ impl Buffer {
           }
         }
       },
-      Dir::Line => {
+      Dir::D => {
         self.delete_lines_down(n)
       }
       _      => {}
@@ -153,7 +152,7 @@ impl Buffer {
   }
 
   
-  pub fn move_cursor(&mut self, by: usize, dir: Dir, mode: Mode) {
+  fn move_cursor(&mut self, by: usize, dir: Dir) { 
     match dir {
       Dir::L => {
         if self.char >= by {
@@ -171,7 +170,7 @@ impl Buffer {
         }
       },
       Dir::R => {
-        if self.char.saturating_add(by) < self.char_len().saturating_sub(mode as usize) {
+        if self.char.saturating_add(by) < self.char_len() {
           self.byte = self.byte.saturating_add(match self.char_at_cursor() {
             Some(c) => c.len_utf8(),
             None => by,
@@ -182,8 +181,8 @@ impl Buffer {
             self.byte += 1;
           }
         } else {
-          self.byte = self.nth(self.row).len().saturating_sub(self.last_char_len() * mode as usize);
-          self.char = self.char_len().saturating_sub(mode as usize);
+          self.byte = self.nth(self.row).len();
+          self.char = self.char_len();
         }
       }
       Dir::U | Dir::D => {
@@ -199,20 +198,33 @@ impl Buffer {
         self.row = target_idx;
         self.char = match self.nth(self.row).chars().enumerate().nth(self.char) {
           Some(n) => n.0,
-          None    => self.char_len().saturating_sub(mode as usize),
+          None    => self.char_len(),
         };
         self.byte = match self.nth(self.row).char_indices().nth(self.char) {
           Some(n) => n.0,
-          None => self.buf[self.row].len().saturating_sub(self.last_char_len() * mode as usize)
-        }
-      }
-      Dir::Line => {}
+          None => self.buf[self.row].len()
+        };
+      },
     }
   }
 
-  pub fn char_len(&self) -> usize {
+  fn leading_whitespaces(&self, row: usize) -> usize {
+    match self.buf.iter().nth(row) {
+      Some(str) => str.chars().take_while(|c| c.is_whitespace()).count(),
+      None => 0
+    }
+  }
+
+  fn char_len(&self) -> usize {
     match self.buf.iter().nth(self.row) {
       Some(str) => str.chars().count(),
+      None => 0
+    }
+  }
+
+  fn byte_len(&self) -> usize {
+    match self.buf.iter().nth(self.row) {
+      Some(str) => str.len(),
       None => 0
     }
   }
@@ -227,12 +239,16 @@ impl Buffer {
     self.char += s.chars().count();
   }
 
-  pub fn insert_newline(&mut self, dir: Dir) {
+  pub fn insert_newline(&mut self, dir: Dir, split: bool) {
     match dir {
       Dir::D => {
-        if let Some(content) = self.nth(self.row).get(self.byte..) {
-          self.buf.insert(self.row+1, content.to_string());
-          self.buf[self.row].drain(self.byte..);
+        if split {
+          if let Some(content) = self.nth(self.row).get(self.byte..) {
+            self.buf.insert(self.row+1, content.to_string());
+            self.buf[self.row].drain(self.byte..);
+          } else {
+            self.buf.insert(self.row+1, String::new())
+          }
         } else {
           self.buf.insert(self.row+1, String::new())
         }
@@ -250,6 +266,7 @@ impl Buffer {
   }
 
   // 
+  #[inline]
   pub fn nth(&self, n: usize) -> &str {
     self.buf
       .iter()
@@ -266,14 +283,23 @@ impl Buffer {
     self.buf.len()
   }
 
+  #[inline]
   pub fn row(&self) -> usize {
     self.row
   }
 
+  #[inline]
   pub fn char_idx(&self) -> usize {
     self.char
   }
 
+  pub fn jump_back_if_end(&mut self) {
+    if self.nth(self.row).chars().nth(self.byte).is_none() {
+      self.char = self.char.saturating_sub(1);
+      self.char = self.byte.saturating_sub(self.last_char_len());
+    }
+  }  
+  
   fn char_at_cursor(&self) -> Option<char> {
     self.buf[self.row].chars().nth(self.char)
   }
@@ -297,8 +323,8 @@ impl Display for Buffer {
     self.buf.iter().enumerate().for_each(|s| 
       formatted.push_str(&format!("{}: {}\n", s.0, s.1))
     );
-    write!(f, "cursor: row: {}, char: {}, byte: {} char: {:?}\nlast affected rows: {:?}\n{formatted}",
-      self.row, self.char, self.byte, self.char_at_cursor(), self.last_mod_rows
+    write!(f, "cursor:\n\trow: {}, char: {}, byte: {} char: {:?}\n{formatted}",
+      self.row, self.char, self.byte, self.char_at_cursor()
     )
   }
 }

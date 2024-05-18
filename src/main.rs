@@ -1,6 +1,8 @@
 mod handler;
-use handler::{EventHandler, Mode, HandleResult};
-use buffer::State;
+mod motion;
+
+use handler::{EventHandler, HandleResult, Mode};
+use motion::*;
 
 mod buffer;
 use buffer::Buffer;
@@ -29,11 +31,10 @@ macro_rules! rect(
 
 struct App {
   canvas: Canvas<Window>,
-  event_handler: EventHandler,
-  ttf_context: Sdl2TtfContext,
-  buffer: Buffer,
   font: &'static str,
-  history: StateHistory,
+  ttf_context: Sdl2TtfContext,
+  event_handler: EventHandler,
+  buffer: Buffer,
 }
 
 impl App {
@@ -42,7 +43,7 @@ impl App {
     let video_subsys = sdl_context.video()?;
 
     let window = video_subsys
-      .window("The Editor", 800, 600)
+      .window("The Editor", 1400, 600)
       .resizable()
       .opengl()
       .build()
@@ -50,6 +51,7 @@ impl App {
 
     let canvas = window
       .into_canvas()
+      // .present_vsync()
       .build()
       .map_err(|e| e.to_string())?;
 
@@ -59,7 +61,6 @@ impl App {
       buffer: Buffer::empty(),
       ttf_context: sdl2::ttf::init().map_err(|e| e.to_string())?,
       font: "./Courier_prime.ttf",
-      history: StateHistory::new(),      
     })
   }
 
@@ -71,6 +72,10 @@ impl App {
     self.render_status_bar()?;
     self.canvas.present();
     Ok(())
+  }
+
+  fn _set_buffer(&mut self, buffer: Buffer) {
+    self.buffer = buffer;
   }
 
   fn render_status_bar(&mut self) -> Result<(), String> {
@@ -99,25 +104,6 @@ impl App {
       width, 
       height
     ))?;   
-
-    // Motion
-    if self.event_handler.get_motion_str().len() > 0 {
-      let surface = font
-        .render(&format!("{}", self.event_handler.get_motion_str()))
-        .blended(TEXT)
-        .map_err(|e| e.to_string())?;
-      let texture = texture_creator
-        .create_texture_from_surface(&surface)
-        .map_err(|e| e.to_string())?;
-      let TextureQuery {width, height, ..} = texture.query();
-
-      self.canvas.copy(&texture, None, rect!(
-        size.0.saturating_sub(rect.x as u32 + 150),
-        rect.y,
-        width, 
-        height
-      ))?; 
-    }
 
     Ok(())
   }
@@ -170,46 +156,31 @@ impl App {
   }
 
   fn run(&mut self) -> Result<(), String> {
+    let mut m_buff = String::new();
     'running: loop {
-      match self.event_handler.handle(&mut self.buffer) {
+      let result = self.event_handler.handle(&mut m_buff);
+      if result != HandleResult::None {
+        println!("\nReceived handleResult: {:?}\n", result);
+      }
+      match result {
         HandleResult::None => {},
-        HandleResult::State(state) => self.history.push(state),
         HandleResult::Quit => break 'running,
+        HandleResult::Motion(m) => { self.buffer.apply_motion(m, self.event_handler.mode() ); },
+        HandleResult::Insert => self.buffer.insert_at_cursor(&m_buff),
+        HandleResult::NewlineSplit => self.buffer.insert_newline(Dir::D, true),
+        HandleResult::NewlineNoSplit => self.buffer.insert_newline(Dir::D, false),
+        HandleResult::NewlineUp => self.buffer.insert_newline(Dir::U, false),
+        HandleResult::SetEditMode => self.buffer.jump_back_if_end()
       }
       self.render()?;
+      m_buff.clear();
     }
     Ok(())
   }
 }
 
-
 fn main() -> Result<(), String> {
-  // env::set_var("RUST_BACKTRACE", "1");
-
   let mut app = App::new()?;
   app.run()?;
   Ok(())
-}
-
-
-
-struct StateHistory {
-  past_states: Vec<State>,
-  cursor: usize,
-}
-
-impl StateHistory {
-  fn push(&mut self, state: State) {
-    self.past_states.insert(self.cursor, state);
-    self.cursor += 1;
-  }
-}
-
-impl StateHistory {
-  fn new() -> Self {
-    StateHistory { 
-      past_states: vec![State::empty()],
-      cursor: 0
-    }
-  }
 }
