@@ -33,19 +33,22 @@ impl Buffer {
     }
   }
 
-  pub fn apply_motion(&mut self, m: Motion, mode: Mode, ) {
+  pub fn set(&mut self, buf: Self) {
+    *self = buf
+  }
+
+  pub fn apply_motion(&mut self, m: Motion, mode: Mode) {
     let verb = match m.buf[0] {
       Cmd::Verb(v) => v,
       _ => panic!("Motion has no verb\n{}", m)
     };
-    // println!("Buffer: {}", self);
     match m.buf[1] {
       Cmd::By(n) => self.apply_w_dir(verb, n, m.buf[2].unwrap_dir()),
       Cmd::ToDest(dest) => self.apply_no_dir(verb, dest),
       _ => panic!("Motion[1] is empty\n{}", m),
     };
     if mode == Mode::Edit {
-      self.jump_back_if_end()
+      self.jump_back_if_end();
     }
   }
 
@@ -86,7 +89,6 @@ impl Buffer {
     match dir {
       Dir::L => {
         if self.char == 0 && self.row > 0 {
-          println!("GASDASDASD");
           let a = std::mem::take(&mut self.buf[self.row]);
           self.row -= 1;
           self.char = self.char_len();
@@ -151,7 +153,6 @@ impl Buffer {
     }
   }
 
-  
   fn move_cursor(&mut self, by: usize, dir: Dir) { 
     match dir {
       Dir::L => {
@@ -240,32 +241,35 @@ impl Buffer {
   }
 
   pub fn insert_newline(&mut self, dir: Dir, split: bool) {
+    let indent = self.leading_whitespaces(self.row);
+    let mut leading = (0..indent)
+      .map(|_| " ").collect::<String>();
     match dir {
       Dir::D => {
         if split {
           if let Some(content) = self.nth(self.row).get(self.byte..) {
-            self.buf.insert(self.row+1, content.to_string());
+            leading.push_str(content);
+            self.buf.insert(self.row+1, leading);
             self.buf[self.row].drain(self.byte..);
           } else {
-            self.buf.insert(self.row+1, String::new())
+            self.buf.insert(self.row+1, leading)
           }
         } else {
-          self.buf.insert(self.row+1, String::new())
+          self.buf.insert(self.row+1, leading)
         }
         self.row += 1;
-        self.char = 0;
-        self.byte = 0;
+        self.char = indent;
+        self.byte = indent;
       },
       Dir::U => {
-        self.buf.insert(self.row, String::new());
-        self.char = 0;
-        self.byte = 0;
+        self.buf.insert(self.row, leading);
+        self.char = indent;
+        self.byte = indent;
       },
       _ => panic!("Should insert newline only up or down")
     }
   }
 
-  // 
   #[inline]
   pub fn nth(&self, n: usize) -> &str {
     self.buf
@@ -296,10 +300,10 @@ impl Buffer {
   pub fn jump_back_if_end(&mut self) {
     if self.nth(self.row).chars().nth(self.byte).is_none() {
       self.char = self.char.saturating_sub(1);
-      self.char = self.byte.saturating_sub(self.last_char_len());
+      self.byte = self.byte.saturating_sub(self.last_char_len());
     }
   }  
-  
+
   fn char_at_cursor(&self) -> Option<char> {
     self.buf[self.row].chars().nth(self.char)
   }
@@ -311,19 +315,29 @@ impl Buffer {
 
 impl Display for Buffer {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-   let mut formatted = "   ".to_string();
-    self.nth(0).chars().enumerate().for_each(|b| {
+    let mut formatted = "   ".to_string();
+
+    let longest_line_index: (usize, &String) = self.buf
+      .iter()
+      .enumerate()
+      .max_by_key(|x| x.1.len())
+      .unwrap();
+
+    self.nth(longest_line_index.0).chars().enumerate().for_each(|b| {
       if b.0 != self.char {
-        formatted.push_str(&format!("{}", b.0));
+        formatted.push_str(&format!("{}", b.0%10));
       } else {
         formatted.push('!');
       }
     });
+
     formatted.push('\n');
+
     self.buf.iter().enumerate().for_each(|s| 
       formatted.push_str(&format!("{}: {}\n", s.0, s.1))
     );
-    write!(f, "cursor:\n\trow: {}, char: {}, byte: {} char: {:?}\n{formatted}",
+
+    write!(f, "\trow: {}, char: {}, byte: {} char: {:?}\n{formatted}",
       self.row, self.char, self.byte, self.char_at_cursor()
     )
   }

@@ -7,6 +7,9 @@ use motion::*;
 mod buffer;
 use buffer::Buffer;
 
+mod history;
+use history::{StateHistory};
+
 extern crate sdl2;
 use sdl2::ttf::Sdl2TtfContext;
 use sdl2::video::Window;
@@ -43,7 +46,7 @@ impl App {
     let video_subsys = sdl_context.video()?;
 
     let window = video_subsys
-      .window("The Editor", 1400, 600)
+      .window("The Editor", 800, 600)
       .resizable()
       .opengl()
       .build()
@@ -156,21 +159,49 @@ impl App {
   }
 
   fn run(&mut self) -> Result<(), String> {
+    use HandleResult::*;
+    let mut history = StateHistory::new();
     let mut m_buff = String::new();
+    let mut inserted = false;
     'running: loop {
       let result = self.event_handler.handle(&mut m_buff);
-      if result != HandleResult::None {
-        println!("\nReceived handleResult: {:?}\n", result);
-      }
+      // if result != HandleResult::None {
+      //   println!("{:?}", result);
+      // }
       match result {
-        HandleResult::None => {},
-        HandleResult::Quit => break 'running,
-        HandleResult::Motion(m) => { self.buffer.apply_motion(m, self.event_handler.mode() ); },
-        HandleResult::Insert => self.buffer.insert_at_cursor(&m_buff),
-        HandleResult::NewlineSplit => self.buffer.insert_newline(Dir::D, true),
-        HandleResult::NewlineNoSplit => self.buffer.insert_newline(Dir::D, false),
-        HandleResult::NewlineUp => self.buffer.insert_newline(Dir::U, false),
-        HandleResult::SetEditMode => self.buffer.jump_back_if_end()
+        None => {},
+        Quit => break 'running,
+        Motion(m) => {
+
+          self.buffer.apply_motion(m, self.event_handler.mode());
+          if m.is_disruptive() {
+            history.push(&self.buffer)
+          }
+        },
+        Insert => {
+          println!("inserting: {}", m_buff);
+          self.buffer.insert_at_cursor(&m_buff);
+          inserted = true;
+          
+        }
+        NewlineSplit => self.buffer.insert_newline(Dir::D, true),
+        NewlineNoSplit => self.buffer.insert_newline(Dir::D, false),
+        NewlineUp => self.buffer.insert_newline(Dir::U, false),
+        SetEditMode => {
+          self.buffer.jump_back_if_end();
+          if inserted {
+            history.push(&self.buffer);
+            inserted = false;
+          }
+
+        }
+        Undo => if let Some(buf) = history.previous() {
+          self.buffer.set(buf)
+        },
+        Redo => if let Some(buf) = history.next() {
+          self.buffer.set(buf)
+        },
+        PrintHistory => println!("HISTORY:\n{}\n--------------------", history)
       }
       self.render()?;
       m_buff.clear();

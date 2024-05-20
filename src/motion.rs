@@ -68,6 +68,15 @@ impl Motion {
     Motion { buf: [Cmd::Verb(Action::Move), Cmd::None, Cmd::None] }
   }
 
+  // Check if Motion mutates buffer content
+  pub fn is_disruptive(&self) -> bool {
+    match self.buf[0] {
+      Cmd::Verb(Action::Cut) => true,
+      Cmd::Verb(Action::Move) => false,
+      _ => panic!("Motion.buff[0] should always be a verb")
+    }
+  }
+
   // returned motion should always be [Verb, By, Dir] or [Verb, Dest, None]
   pub fn push(&mut self, c: Option<char>) -> Option<Motion> {
     use Action::*;
@@ -82,7 +91,7 @@ impl Motion {
     if c.is_alphabetic(){ match c {
       'x' => {
         self.buf[0] = Verb(Cut);
-        if self.buf[1] == Cmd::None { self.buf[1] = Cmd::By(1) }
+        if self.buf[1] == None { self.buf[1] = Cmd::By(1) }
         self.buf[2] = ToDir(Dir::R);
         ready = true
       }
@@ -122,6 +131,7 @@ impl Motion {
     }
 
     if c.is_ascii_punctuation() {
+      ready = true;
       match c {
         '=' => {
           self.buf[1] = Cmd::ToDest(Dest::Endl);
@@ -129,9 +139,8 @@ impl Motion {
         '_' => {
           self.buf[1] = Cmd::ToDest(Dest::TxtStart);
         },
-        _   => {}
+        _   => ready = false
       }
-      ready = true
     }
 
     if c.is_ascii_digit() {

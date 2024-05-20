@@ -28,6 +28,9 @@ pub enum HandleResult {
   NewlineSplit,
   NewlineNoSplit,
   NewlineUp,
+  Undo,
+  Redo,
+  PrintHistory
 }
 
 impl EventHandler {
@@ -66,6 +69,15 @@ impl EventHandler {
               "O" => {
                 self.mode = Mode::Insert;
                 result = HandleResult::NewlineUp;
+              }
+              "u" => {
+                result = HandleResult::Undo;
+              }
+              "U" => {
+                result = HandleResult::Redo;
+              }
+              "H" => {
+                result = HandleResult::PrintHistory;
               }
               _ => if let Some(motion) = self.command.push(text.chars().nth(0)) {
                 result = HandleResult::Motion(motion);
