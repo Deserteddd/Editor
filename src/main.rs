@@ -1,11 +1,12 @@
 mod handler;
 mod motion;
+mod renderer;
 
 use handler::{EventHandler, HandleResult, Mode};
 use motion::*;
 
 mod buffer;
-use buffer::Buffer;
+use buffer::buffer::Buffer;
 
 mod history;
 use history::{StateHistory};
@@ -42,6 +43,7 @@ struct App {
 
 impl App {
   fn new() -> Result<App, String> {
+
     let sdl_context = sdl2::init()?;
     let video_subsys = sdl_context.video()?;
 
@@ -54,14 +56,13 @@ impl App {
 
     let canvas = window
       .into_canvas()
-      // .present_vsync()
       .build()
       .map_err(|e| e.to_string())?;
 
     Ok(App { 
       canvas: canvas,
       event_handler: EventHandler::new(&sdl_context)?,
-      buffer: Buffer::empty(),
+      buffer: Buffer::new(""),
       ttf_context: sdl2::ttf::init().map_err(|e| e.to_string())?,
       font: "./Courier_prime.ttf",
     })
@@ -84,6 +85,7 @@ impl App {
   fn render_status_bar(&mut self) -> Result<(), String> {
     let size = self.canvas.output_size()?;
     let rect = rect!(0, size.1-20, size.0, 20);
+    let cmd_rect = rect!(110, size.1-20, size.0, 20);
     let texture_creator = self.canvas.texture_creator();
     let mut font = self.ttf_context.load_font(self.font, 16)?;
 
@@ -93,7 +95,7 @@ impl App {
 
     // MODE
     let surface = font
-      .render(&format!("mode: {:?}", self.event_handler.mode()))
+      .render(&format!("{:?}", self.event_handler.mode()))
       .blended(TEXT)
       .map_err(|e| e.to_string())?;
     let texture = texture_creator
@@ -102,18 +104,38 @@ impl App {
     let TextureQuery {width, height, ..} = texture.query();
 
     self.canvas.copy(&texture, None, rect!(
-      rect.x,
+      rect.x+10,
       rect.y,
       width, 
       height
-    ))?;   
+    ))?;  
+
+    // COMMAND
+    if self.event_handler.cmd_active(){
+      let surface = font
+        .render(&format!(":{}", self.event_handler.command()))
+        .blended(TEXT)
+        .map_err(|e| e.to_string())?;
+      let texture = texture_creator
+        .create_texture_from_surface(&surface)
+        .map_err(|e| e.to_string())?;
+      let TextureQuery {width, height, ..} = texture.query();
+
+      self.canvas.copy(&texture, None, rect!(
+        cmd_rect.x,
+        cmd_rect.y,
+        width, 
+        height
+      ))?;
+    } 
 
     Ok(())
   }
 
   fn render_cursor(&mut self) -> Result<(), String> {
+    // println!("{}", self.buffer.cursor);
     self.canvas.set_draw_color(CURSOR);
-    let x = self.buffer.char_idx();
+    let x = self.buffer.col().saturating_sub(self.event_handler.mode() as usize);
     let width = match self.event_handler.mode() {
       Mode::Edit => 14,
       Mode::Insert => 3,
@@ -160,9 +182,9 @@ impl App {
 
   fn run(&mut self) -> Result<(), String> {
     use HandleResult::*;
-    let mut history = StateHistory::new();
+    // let mut history = StateHistory::new();
     let mut m_buff = String::new();
-    let mut inserted = false;
+    // let mut inserted = false;
     'running: loop {
       let result = self.event_handler.handle(&mut m_buff);
       // if result != HandleResult::None {
@@ -174,43 +196,59 @@ impl App {
         Motion(m) => {
 
           self.buffer.apply_motion(m, self.event_handler.mode());
-          if m.is_disruptive() {
-            history.push(&self.buffer)
-          }
+          // if m.is_disruptive() {
+          //   history.push(&self.buffer)
+          // }
         },
         Insert => {
-          println!("inserting: {}", m_buff);
           self.buffer.insert_at_cursor(&m_buff);
-          inserted = true;
+          // inserted = true;
           
         }
-        NewlineSplit => self.buffer.insert_newline(Dir::D, true),
-        NewlineNoSplit => self.buffer.insert_newline(Dir::D, false),
-        NewlineUp => self.buffer.insert_newline(Dir::U, false),
+        NewlineSplit => self.buffer.insert_at_cursor("\n"),
+        NewlineNoSplit => {}, //self.buffer.insert_newline(Dir::D, false),
+        NewlineUp => {}, // self.buffer.insert_newline(Dir::U, false),
         SetEditMode => {
-          self.buffer.jump_back_if_end();
-          if inserted {
-            history.push(&self.buffer);
-            inserted = false;
-          }
+          // if inserted {
+          //   history.push(&self.buffer);
+          //   inserted = false;
+          // }
 
+        },
+        Command => {
+          println!("Received handleResult::command: {}", m_buff);
+          self.handle_cmd_input(&m_buff)
         }
-        Undo => if let Some(buf) = history.previous() {
-          self.buffer.set(buf)
-        },
-        Redo => if let Some(buf) = history.next() {
-          self.buffer.set(buf)
-        },
-        PrintHistory => println!("HISTORY:\n{}\n--------------------", history)
+        _ => {}
+        // Undo => if let Some(buf) = history.previous() {
+        //   self.buffer.set(buf)
+        // },
+        // Redo => if let Some(buf) = history.next() {
+        //   self.buffer.set(buf)
+        // },
+        // PrintHistory => println!("HISTORY:\n{}\n--------------------", history)
       }
-      self.render()?;
+      // self.render()?;
       m_buff.clear();
     }
     Ok(())
   }
+
+  fn handle_cmd_input(&mut self, cmd: &str) {
+    if let Ok(num) = cmd.parse::<usize>() {
+      // self.buffer.set_cursor_to_line(num);
+      // println!("Parsed command: {}", num);
+    }
+    match cmd {
+      "d" => {println!("{}", self.buffer.content)},
+      _     => {}
+    }
+  }
 }
 
 fn main() -> Result<(), String> {
+  let mut s = String::from("a");
+  println!("{}", s.lines().count());
   let mut app = App::new()?;
   app.run()?;
   Ok(())

@@ -64,10 +64,12 @@ pub struct Motion {
 }
 
 impl Motion {
-  pub fn new() -> Motion {
+  pub fn new() -> Self {
     Motion { buf: [Cmd::Verb(Action::Move), Cmd::None, Cmd::None] }
   }
-
+  pub fn from(buf: [Cmd; 3]) -> Self {
+    Motion {buf}
+  }
   // Check if Motion mutates buffer content
   pub fn is_disruptive(&self) -> bool {
     match self.buf[0] {
@@ -133,9 +135,6 @@ impl Motion {
     if c.is_ascii_punctuation() {
       ready = true;
       match c {
-        '=' => {
-          self.buf[1] = Cmd::ToDest(Dest::Endl);
-        }
         '_' => {
           self.buf[1] = Cmd::ToDest(Dest::TxtStart);
         },
@@ -149,7 +148,7 @@ impl Motion {
       } else if c as u8 != 48 {
         self.buf[1] = By((c as u8 - 48) as usize)
       } else {
-        self.buf[1] = ToDest(Dest::TxtStart);
+        self.buf[1] = ToDest(Dest::Endl);
         ready = true;
       }
     }
